@@ -6,6 +6,68 @@ from IPython.display import display
 from pandas.tseries.offsets import CustomBusinessDay, Day, BusinessDay
 from scipy.stats import mode
 
+def capneutralize(df,cap):
+    '''
+    市值中性化
+    Parameters:
+    ——————
+    df: pd.DataFrame
+    从API接口下载的因子数据
+    
+    cap: pd.DataFrame
+    从API接口下载的市值数据
+    '''
+    alpha = pd.DataFrame()
+    df = df.dropna(how='all').dropna(axis=1)
+    df = df.fillna(0)
+    cap=cap.dropna(axis=1)[df.columns]
+    for day in df.index:
+        X= np.array(cap.loc[day])
+        y = df.loc[day].values
+        model=sm.OLS(y,X)
+        residual = model.fit().resid
+        alpha = alpha.append(pd.DataFrame(residual.reshape(1,residual.shape[0]), index = [day], columns = df.columns))        
+    return alpha
+
+def indneutralize(df,sector):
+    '''
+    行业中性化
+    Parameters:
+    ——————
+    df: pd.DataFrame
+    从API接口下载的因子数据
+    
+    sector: pd.DataFrame
+    从API接口下载的行业数据
+    '''
+    alpha = pd.DataFrame()
+    df = df.dropna(how='all').dropna(axis=1)
+    df = df.fillna(0)
+    sector=sector.dropna(axis=1)[df.columns]
+    for day in df.index:
+        X= np.array(sector.loc[day])
+        y = df.loc[day].values
+        model=sm.OLS(y,X)
+        residual = model.fit().resid
+        alpha = alpha.append(pd.DataFrame(residual.reshape(1,residual.shape[0]), index = [day], columns = df.columns))        
+    return alpha
+
+def price_data_when_neuneutralize(price_data,alpha):
+    '''
+    使价格数据能够运用到行业、市值中性化的分析过程中
+    Parameters:
+    ——————
+    price_data: pd.DataFrame
+    从API接口下载的价格数据
+    
+    alpha: pd.DataFrame
+    行业或市值中性化后的因子数据
+    
+    '''
+    price_data=price_data.loc[alpha.index][alpha.columns]
+    return price_data
+    
+
 
 def data_format(alpha_pre,price_data):
     """
@@ -22,6 +84,7 @@ def data_format(alpha_pre,price_data):
     price_data.index = pd.to_datetime(price_data.index)
     factor = pd.DataFrame(alpha_pre.T.unstack(),columns=['alpha'])
     return factor,price_data
+
 
 
 def compute_forward_returns(factor,
@@ -109,6 +172,87 @@ def compute_forward_returns(factor,
         pd.MultiIndex.from_product(
             [factor_dateindex, prices.columns],
             names=['date', 'asset']
+        ),
+        inplace=True
+    )
+    return df
+
+def compute_forward_returns_min(factor,
+                            prices,
+                            periods=(1, 5, 10),
+                            filter_zscore=None,
+                            cumulative_returns=True):
+    """
+    Finds the 1D period forward returns (as percent change) for each asset
+    provided.
+
+    Parameters
+    ----------
+    factor : pd.Series - MultiIndex
+        A MultiIndex Series indexed by timestamp (level 0) and asset
+        (level 1), containing the values for a single alpha factor.
+
+        - See full explanation in utils.get_clean_factor_and_forward_returns
+
+    prices : pd.DataFrame
+        Pricing data to use in forward price calculation.
+        Assets as columns, dates as index. Pricing data must
+        span the factor analysis time period plus an additional buffer window
+        that is greater than the maximum number of expected periods
+        in the forward returns calculations.
+    filter_zscore : int or float, optional
+        Sets forward returns greater than X standard deviations
+        from the the mean to nan. Set it to 'None' to avoid filtering.
+        Caution: this outlier filtering incorporates lookahead bias.
+    cumulative_returns : bool, optional
+        If True, forward returns columns will contain cumulative returns.
+        Setting this to False is useful if you want to analyze how predictive
+        a factor is for a single forward day.
+
+    Returns
+    -------
+    forward_returns : pd.DataFrame - MultiIndex
+        A MultiIndex DataFrame indexed by timestamp (level 0) and asset
+        (level 1), containing the forward returns for assets.
+        Forward returns column names follow the format accepted by
+        pd.Timedelta (e.g. '1D', '30m', '3h15m', '1D1h', etc).
+        'date' index freq property (forward_returns.index.levels[0].freq)
+        will be set to a trading calendar (pandas DateOffset) inferred
+        from the input data (see infer_trading_calendar for more details).
+    """
+
+    factor_dateindex1 = factor.index.levels[0]
+    factor_dateindex2 = factor.index.levels[1]
+
+    # chop prices down to only the assets we care about (= unique assets in
+    # `factor`).  we could modify `prices` in place, but that might confuse
+    # the caller.
+    prices = prices.filter(items=factor.index.levels[2])
+
+    raw_values_dict = {}
+    for period in sorted(periods):
+        if cumulative_returns:
+            returns = prices.pct_change(period)
+        else:
+            returns = prices.pct_change()
+
+        forward_returns = \
+            returns.shift(-period)
+
+        if filter_zscore is not None:
+            mask = abs(
+                    forward_returns - forward_returns.mean()
+                ) > (filter_zscore * forward_returns.std())
+            forward_returns[mask] = np.nan
+
+        name=str(period)+'M'
+        raw_values_dict[name] = np.concatenate(forward_returns.values)
+
+    df = pd.DataFrame.from_dict(raw_values_dict)
+    df.set_index(
+        pd.MultiIndex.from_product(
+            [factor_dateindex1,factor_dateindex2, prices.columns],
+            names=['date','min', 'asset']
         ),
         inplace=True
     )

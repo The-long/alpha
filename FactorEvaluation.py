@@ -197,8 +197,58 @@ def factor_eval_each_sector(alpha_pre, price_data, groupby,by_group=False,quanti
     return df
 
         
-
+def factor_eval_one_sector(alpha_pre, price_data,p,groupby,by_group=False,quantiles=5, long_short = 'long_short'):
+    factor,prices=dp.data_format(alpha_pre,price_data)
+    factor_data=dp.get_clean_factor_and_forward_returns(factor,
+                                         prices,
+                                         groupby=groupby,
+                                         binning_by_group=by_group,
+                                         quantiles=5,
+                                         bins=None,
+                                         filter_zscore=20,
+                                         groupby_labels=None,
+                                         max_loss=0.35,
+                                         zero_aware=False
+                                        )
     
+    return_each_sector={}
+    return_std_each_sector={}
+    
+    factor_data_p=factor_data[factor_data['group']==p]
+    factor_returns=cfr.factor_returns(factor_data_p,
+                       demeaned=True,
+                       group_adjust=False,
+                       equal_weight=False,
+                       by_asset=False,
+                       long_short=long_short)
+    return_each_sector[p]=factor_returns.mean()
+    return_std_each_sector[p]=factor_returns.std()
+    pt.plot_cumulative_returns(factor_returns, title=p, ax=None)
+    mean_ret_by_q,mean_ret_by_std=cfr.mean_return_by_quantile(factor_data_p,
+                            by_date=False,
+                            by_group=False,
+                            demeaned=True,
+                            group_adjust=False)
+        
+    pt.plot_quantile_returns_bar(mean_ret_by_q,title=p,
+                                  by_group=False,
+                                  ylim_percentiles=None,
+                                  ax=None)
+    quantile_returns,quantile_returns_std=cfr.mean_return_by_quantile(factor_data_p,
+                                by_date=True,
+                                by_group=False,
+                                demeaned=True,
+                                group_adjust=False)
+    pt.plot_cumulative_returns_by_quantile(quantile_returns,title=p,
+                                            ax=None)
+    df = pd.DataFrame.from_dict(return_each_sector)
+    df=df.T-df.T.mean()
+    pt.plot_sector_returns_bar(df,
+                                  by_group=False,
+                                  ylim_percentiles=None,
+                                  ax=None)
+    return df
+
     
     
     
